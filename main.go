@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/smallstep/webhooks/pkg/server"
+	"go.step.sm/crypto/sshutil"
 )
 
 var certFile = "webhook.crt"
@@ -31,6 +32,9 @@ var webhookIDsToSecrets = map[string]server.Secret{
 	"ce1c8481-89eb-4e22-ba7f-106f8a5ede21": server.Secret{
 		Signing: "KYAkS5G1sFUX1NRUdFVFTG5J1ZsJu9iNSbn3tGJWs6Z9nY4ak5Lmui1G25XxJQNdPo0ptPQa03osacV59ApANA==",
 		Bearer:  "abc123xyz",
+	},
+	"b4b3f3fe-66a6-454e-bd6e-b9417c6a136e": server.Secret{
+		Signing: "UI/hIskDzPeBQz55rmlBno7LBBU+m+X2J4x/uh8F7ahm1z5m/mkcKWjo23rr/O095RKQKBqisnnvpvPwGq3AvA==",
 	},
 }
 
@@ -56,6 +60,9 @@ func main() {
 	enricher := &server.Enricher{
 		Secrets: webhookIDsToSecrets,
 		Lookup: func(key string, csr *x509.CertificateRequest) (any, error) {
+			return db[key], nil
+		},
+		LookupSSH: func(key string, cr *sshutil.CertificateRequest) (any, error) {
 			return db[key], nil
 		},
 	}

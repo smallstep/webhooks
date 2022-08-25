@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"path"
 
+	"golang.org/x/crypto/ssh"
+
 	"go.step.sm/crypto/sshutil"
 )
 
@@ -24,14 +26,22 @@ type Secret struct {
 }
 
 type Enricher struct {
-	Lookup  func(key string, csr *x509.CertificateRequest) (any, error)
-	Secrets map[string]Secret
+	Lookup    func(key string, csr *x509.CertificateRequest) (any, error)
+	LookupSSH func(key string, cr *sshutil.CertificateRequest) (any, error)
+	Secrets   map[string]Secret
+}
+
+type sshCR struct {
+	Key        []byte
+	Type       string
+	KeyID      string
+	Principals []string
 }
 
 type webhookRequestBody struct {
-	Timestamp string                     `json:"timestamp"`
-	X509_CSR  []byte                     `json:"csr,omitempty"`
-	SSH_CR    sshutil.CertificateRequest `json:"ssh_cr,omitempty"`
+	Timestamp string `json:"timestamp"`
+	X509_CSR  []byte `json:"csr,omitempty"`
+	SSH_CR    *sshCR `json:"ssh_cr,omitempty"`
 }
 
 type response struct {
@@ -101,19 +111,44 @@ func (e *Enricher) Handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	csr, err := x509.ParseCertificateRequest(wrb.X509_CSR)
-	if err != nil {
-		log.Println(err.Error())
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
 
 	_, key := path.Split(r.URL.Path)
-	data, err := e.Lookup(key, csr)
-	if err != nil {
-		log.Printf("Failed to lookup data for %s: %v", key, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+	var data any
+
+	if len(wrb.X509_CSR) > 0 {
+		csr, err := x509.ParseCertificateRequest(wrb.X509_CSR)
+		if err != nil {
+			log.Println(err.Error())
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		data, err = e.Lookup(key, csr)
+		if err != nil {
+			log.Printf("Failed to lookup data for %s: %v", key, err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+	} else if wrb.SSH_CR != nil {
+		pubKey, err := ssh.ParsePublicKey(wrb.SSH_CR.Key)
+		if err != nil {
+			log.Printf("Failed to parse ssh public key: %v", err)
+			http.Error(w, "Invalid public key", http.StatusBadRequest)
+			return
+		}
+
+		cr := &sshutil.CertificateRequest{
+			Key:        pubKey,
+			Type:       wrb.SSH_CR.Type,
+			KeyID:      wrb.SSH_CR.KeyID,
+			Principals: wrb.SSH_CR.Principals,
+		}
+		data, err = e.LookupSSH(key, cr)
+		if err != nil {
+			log.Printf("Failed to lookup data for %s: %v", key, err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	err = json.NewEncoder(w).Encode(response{data})
