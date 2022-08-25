@@ -55,7 +55,7 @@ func main() {
 
 	enricher := &server.Enricher{
 		Secrets: webhookIDsToSecrets,
-		Lookup: func(key string) (any, error) {
+		Lookup: func(key string, csr *x509.CertificateRequest) (any, error) {
 			return db[key], nil
 		},
 	}

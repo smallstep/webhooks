@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,8 @@ import (
 	"log"
 	"net/http"
 	"path"
+
+	"go.step.sm/crypto/sshutil"
 )
 
 type Secret struct {
@@ -21,8 +24,14 @@ type Secret struct {
 }
 
 type Enricher struct {
-	Lookup  func(key string) (any, error)
+	Lookup  func(key string, csr *x509.CertificateRequest) (any, error)
 	Secrets map[string]Secret
+}
+
+type webhookRequestBody struct {
+	Timestamp string                     `json:"timestamp"`
+	X509_CSR  []byte                     `json:"csr,omitempty"`
+	SSH_CR    sshutil.CertificateRequest `json:"ssh_cr,omitempty"`
 }
 
 type response struct {
@@ -85,8 +94,22 @@ func (e *Enricher) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wrb := &webhookRequestBody{}
+	err = json.Unmarshal(body, wrb)
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	csr, err := x509.ParseCertificateRequest(wrb.X509_CSR)
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
 	_, key := path.Split(r.URL.Path)
-	data, err := e.Lookup(key)
+	data, err := e.Lookup(key, csr)
 	if err != nil {
 		log.Printf("Failed to lookup data for %s: %v", key, err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -99,4 +122,6 @@ func (e *Enricher) Handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", 500)
 		return
 	}
+
+	fmt.Printf("Received enriching webhook request for %q. Sent data: %+v\n", key, data)
 }
