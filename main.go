@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	casapi "github.com/smallstep/certificates/cas/apiv1"
 	"github.com/smallstep/webhooks/pkg/server"
 	"go.step.sm/crypto/sshutil"
 )
@@ -28,15 +29,7 @@ var db = map[string]data{
 }
 
 // For demonstration only. Do not hardcode or commit actual webhook secrets.
-var webhookIDsToSecrets = map[string]server.Secret{
-	"ce1c8481-89eb-4e22-ba7f-106f8a5ede21": server.Secret{
-		Signing: "KYAkS5G1sFUX1NRUdFVFTG5J1ZsJu9iNSbn3tGJWs6Z9nY4ak5Lmui1G25XxJQNdPo0ptPQa03osacV59ApANA==",
-		Bearer:  "abc123xyz",
-	},
-	"b4b3f3fe-66a6-454e-bd6e-b9417c6a136e": server.Secret{
-		Signing: "UI/hIskDzPeBQz55rmlBno7LBBU+m+X2J4x/uh8F7ahm1z5m/mkcKWjo23rr/O095RKQKBqisnnvpvPwGq3AvA==",
-	},
-}
+var webhookIDsToSecrets = map[string]server.Secret{}
 
 func main() {
 	caCertPool := x509.NewCertPool()
@@ -57,7 +50,7 @@ func main() {
 		},
 	}
 
-	enricher := &server.Enricher{
+	h := &server.Handler{
 		Secrets: webhookIDsToSecrets,
 		Lookup: func(key string, csr *x509.CertificateRequest) (any, error) {
 			return db[key], nil
@@ -65,8 +58,17 @@ func main() {
 		LookupSSH: func(key string, cr *sshutil.CertificateRequest) (any, error) {
 			return db[key], nil
 		},
+		Allow: func(cert *casapi.CreateCertificateRequest) (bool, error) {
+			cn := cert.Template.Subject.CommonName
+			if cn == "" {
+				cn = cert.CSR.Subject.CommonName
+			}
+			_, ok := db[cn]
+			return ok, nil
+		},
 	}
-	http.HandleFunc("/", enricher.Handle)
+	http.HandleFunc("/", h.Enrich)
+	http.HandleFunc("/auth", h.Authorize)
 
 	err := s.ListenAndServeTLS(certFile, keyFile)
 	log.Fatal(err)

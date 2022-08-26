@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	casapi "github.com/smallstep/certificates/cas/apiv1"
 	"go.step.sm/crypto/sshutil"
 )
 
@@ -25,9 +26,10 @@ type Secret struct {
 	Password string
 }
 
-type Enricher struct {
+type Handler struct {
 	Lookup    func(key string, csr *x509.CertificateRequest) (any, error)
 	LookupSSH func(key string, cr *sshutil.CertificateRequest) (any, error)
+	Allow     func(certificate *casapi.CreateCertificateRequest) (bool, error)
 	Secrets   map[string]Secret
 }
 
@@ -39,40 +41,42 @@ type sshCR struct {
 }
 
 type webhookRequestBody struct {
-	Timestamp string `json:"timestamp"`
-	X509_CSR  []byte `json:"csr,omitempty"`
-	SSH_CR    *sshCR `json:"ssh_cr,omitempty"`
+	Timestamp   string                           `json:"timestamp"`
+	X509_CSR    []byte                           `json:"csr,omitempty"`
+	SSH_CR      *sshCR                           `json:"ssh_cr,omitempty"`
+	Certificate *casapi.CreateCertificateRequest `json:"certificate,omitempty"`
 }
 
 type response struct {
-	Data any `json:"data"`
+	Data  any  `json:"data,omitempty"`
+	Allow bool `json:"allow,omitempty"`
 }
 
-func (e *Enricher) Handle(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*webhookRequestBody, bool) {
 	id := r.Header.Get("X-Smallstep-Webhook-ID")
 	if id == "" {
 		http.Error(w, "Missing X-Smallstep-Webhook-ID header", http.StatusBadRequest)
-		return
+		return nil, false
 	}
-	secret, ok := e.Secrets[id]
+	secret, ok := h.Secrets[id]
 	if !ok {
 		log.Printf("Missing signing secret for webhook %s", id)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+		return nil, false
 	}
 	if secret.Bearer != "" {
 		wantAuth := fmt.Sprintf("Bearer %s", secret.Bearer)
 		if r.Header.Get("Authorization") != wantAuth {
 			log.Printf("Incorrect bearer authorization header for %s", id)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+			return nil, false
 		}
 	} else if secret.Username != "" || secret.Password != "" {
 		user, pass, _ := r.BasicAuth()
 		if user != secret.Username || pass != secret.Password {
 			log.Printf("Incorrect basic authorization header for %s", id)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+			return nil, false
 		}
 	}
 
@@ -80,28 +84,28 @@ func (e *Enricher) Handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, "Invalid X-Smallstep-Signature header", http.StatusBadRequest)
-		return
+		return nil, false
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
-		return
+		return nil, false
 	}
 
 	sigSecret, err := base64.StdEncoding.DecodeString(secret.Signing)
 	if err != nil {
 		log.Printf("Failed to decode signing secret for %s: %v", id, err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+		return nil, false
 	}
 
 	mac := hmac.New(sha256.New, sigSecret).Sum(body)
 	if ok := hmac.Equal(sig, mac); !ok {
 		log.Printf("Failed to verify request signature for %s", id)
 		http.Error(w, "Invalid signature", http.StatusBadRequest)
-		return
+		return nil, false
 	}
 
 	wrb := &webhookRequestBody{}
@@ -109,6 +113,38 @@ func (e *Enricher) Handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return nil, false
+	}
+
+	return wrb, true
+}
+
+func (e *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
+	wrb, ok := e.authenticate(w, r)
+	if !ok {
+		return
+	}
+
+	allow, err := e.Allow(wrb.Certificate)
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	err = json.NewEncoder(w).Encode(response{Allow: allow})
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	fmt.Printf("Received authorizing webhook request. Sent allow: %t\n", allow)
+}
+
+func (e *Handler) Enrich(w http.ResponseWriter, r *http.Request) {
+	wrb, ok := e.authenticate(w, r)
+	if !ok {
 		return
 	}
 
@@ -151,7 +187,7 @@ func (e *Enricher) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err = json.NewEncoder(w).Encode(response{data})
+	err := json.NewEncoder(w).Encode(response{Data: data})
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, "Internal Server Error", 500)
