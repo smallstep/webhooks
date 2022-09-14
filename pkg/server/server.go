@@ -3,7 +3,6 @@ package server
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -13,10 +12,8 @@ import (
 	"net/http"
 	"path"
 
+	"github.com/smallstep/certificates/webhook"
 	"golang.org/x/crypto/ssh"
-
-	casapi "github.com/smallstep/certificates/cas/apiv1"
-	"go.step.sm/crypto/sshutil"
 )
 
 type Secret struct {
@@ -27,32 +24,14 @@ type Secret struct {
 }
 
 type Handler struct {
-	Lookup    func(key string, csr *x509.CertificateRequest) (any, error)
-	LookupSSH func(key string, cr *sshutil.CertificateRequest) (any, error)
-	Allow     func(certificate *casapi.CreateCertificateRequest) (bool, error)
-	Secrets   map[string]Secret
+	LookupX509 func(key string, cr *webhook.X509CertificateRequest) (any, error)
+	LookupSSH  func(key string, cr *webhook.SSHCertificateRequest) (any, error)
+	AllowX509  func(certificate *webhook.X509Certificate) (bool, error)
+	AllowSSH   func(certificate *webhook.SSHCertificate) (bool, error)
+	Secrets    map[string]Secret
 }
 
-type sshCR struct {
-	Key        []byte
-	Type       string
-	KeyID      string
-	Principals []string
-}
-
-type webhookRequestBody struct {
-	Timestamp   string                           `json:"timestamp"`
-	X509_CSR    []byte                           `json:"csr,omitempty"`
-	SSH_CR      *sshCR                           `json:"ssh_cr,omitempty"`
-	Certificate *casapi.CreateCertificateRequest `json:"certificate,omitempty"`
-}
-
-type response struct {
-	Data  any  `json:"data,omitempty"`
-	Allow bool `json:"allow,omitempty"`
-}
-
-func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*webhookRequestBody, bool) {
+func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*webhook.RequestBody, bool) {
 	id := r.Header.Get("X-Smallstep-Webhook-ID")
 	if id == "" {
 		http.Error(w, "Missing X-Smallstep-Webhook-ID header", http.StatusBadRequest)
@@ -108,7 +87,7 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*webhook
 		return nil, false
 	}
 
-	wrb := &webhookRequestBody{}
+	wrb := &webhook.RequestBody{}
 	err = json.Unmarshal(body, wrb)
 	if err != nil {
 		log.Println(err.Error())
@@ -119,20 +98,20 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*webhook
 	return wrb, true
 }
 
-func (e *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
-	wrb, ok := e.authenticate(w, r)
+func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
+	wrb, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
 
-	allow, err := e.Allow(wrb.Certificate)
+	allow, err := h.AllowX509(wrb.X509Certificate)
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, "Internal Server Error", 500)
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(response{Allow: allow})
+	err = json.NewEncoder(w).Encode(webhook.ResponseBody{Allow: allow})
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, "Internal Server Error", 500)
@@ -142,57 +121,101 @@ func (e *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Received authorizing webhook request. Sent allow: %t\n", allow)
 }
 
-func (e *Handler) Enrich(w http.ResponseWriter, r *http.Request) {
-	wrb, ok := e.authenticate(w, r)
+func (h *Handler) AuthorizeSSH(w http.ResponseWriter, r *http.Request) {
+	wrb, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
-
-	_, key := path.Split(r.URL.Path)
-	var data any
-
-	if len(wrb.X509_CSR) > 0 {
-		csr, err := x509.ParseCertificateRequest(wrb.X509_CSR)
-		if err != nil {
-			log.Println(err.Error())
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-
-		data, err = e.Lookup(key, csr)
-		if err != nil {
-			log.Printf("Failed to lookup data for %s: %v", key, err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-	} else if wrb.SSH_CR != nil {
-		pubKey, err := ssh.ParsePublicKey(wrb.SSH_CR.Key)
+	if len(wrb.SSHCertificate.PublicKey) > 0 {
+		pubKey, err := ssh.ParsePublicKey(wrb.SSHCertificate.PublicKey)
 		if err != nil {
 			log.Printf("Failed to parse ssh public key: %v", err)
-			http.Error(w, "Invalid public key", http.StatusBadRequest)
+			http.Error(w, "Internal Server Error", 500)
 			return
 		}
-
-		cr := &sshutil.CertificateRequest{
-			Key:        pubKey,
-			Type:       wrb.SSH_CR.Type,
-			KeyID:      wrb.SSH_CR.KeyID,
-			Principals: wrb.SSH_CR.Principals,
-		}
-		data, err = e.LookupSSH(key, cr)
+		wrb.SSHCertificate.Certificate.Key = pubKey
+	}
+	if len(wrb.SSHCertificate.SignatureKey) > 0 {
+		sigKey, err := ssh.ParsePublicKey(wrb.SSHCertificate.SignatureKey)
 		if err != nil {
-			log.Printf("Failed to lookup data for %s: %v", key, err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			log.Printf("Failed to parse ssh signature key: %v", err)
+			http.Error(w, "Internal Server Error", 500)
 			return
 		}
+		wrb.SSHCertificate.Certificate.SignatureKey = sigKey
 	}
 
-	err := json.NewEncoder(w).Encode(response{Data: data})
+	allow, err := h.AllowSSH(wrb.SSHCertificate)
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, "Internal Server Error", 500)
 		return
 	}
 
-	fmt.Printf("Received enriching webhook request for %q. Sent data: %+v\n", key, data)
+	err = json.NewEncoder(w).Encode(webhook.ResponseBody{Allow: allow})
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	fmt.Printf("Received authorizing webhook request. Sent allow: %t\n", allow)
+}
+
+func (h *Handler) EnrichX509(w http.ResponseWriter, r *http.Request) {
+	wrb, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+
+	_, key := path.Split(r.URL.Path)
+
+	data, err := h.LookupX509(key, wrb.X509CertificateRequest)
+	if err != nil {
+		log.Printf("Failed to lookup data for %s: %v", key, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	err = json.NewEncoder(w).Encode(webhook.ResponseBody{Data: data, Allow: false})
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	fmt.Printf("Received x509 enriching webhook request for %q. Sent data: %+v\n", key, data)
+}
+
+func (h *Handler) EnrichSSH(w http.ResponseWriter, r *http.Request) {
+	wrb, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+
+	_, key := path.Split(r.URL.Path)
+
+	cr := wrb.SSHCertificateRequest
+	_, err := ssh.ParsePublicKey(cr.PublicKey)
+	if err != nil {
+		log.Printf("Failed to parse ssh public key: %v", err)
+		http.Error(w, "Invalid public key", http.StatusBadRequest)
+		return
+	}
+
+	data, err := h.LookupSSH(key, cr)
+	if err != nil {
+		log.Printf("Failed to lookup data for %s: %v", key, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	err = json.NewEncoder(w).Encode(webhook.ResponseBody{Data: data, Allow: true})
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	fmt.Printf("Received SSH enriching webhook request for %q. Sent data: %+v\n", key, data)
 }
