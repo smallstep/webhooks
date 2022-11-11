@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/smallstep/certificates v0.21.0
-	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3
+	golang.org/x/crypto v0.0.0-20221005025214-4161e89ecf1b
 )
 
 require (
@@ -19,10 +19,10 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/shopspring/decimal v1.2.0 // indirect
 	github.com/spf13/cast v1.4.1 // indirect
-	go.step.sm/crypto v0.19.1-0.20220908135942-4e958c8bdbe1 // indirect
-	golang.org/x/net v0.0.0-20220607020251-c690dde0001d // indirect
-	golang.org/x/sys v0.0.0-20220610221304-9f5ed59c137d // indirect
-	golang.org/x/text v0.3.8-0.20211004125949-5bd84dd9b33b // indirect
+	go.step.sm/crypto v0.21.0 // indirect
+	golang.org/x/net v0.0.0-20221012135044-0b7e1fb9d458 // indirect
+	golang.org/x/sys v0.0.0-20221006211917-84dc82d7e875 // indirect
+	golang.org/x/text v0.3.8 // indirect
 )
 
 replace github.com/smallstep/certificates => ../certificates

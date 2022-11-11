@@ -24,8 +24,8 @@ type Secret struct {
 }
 
 type Handler struct {
-	LookupX509 func(key string, cr *webhook.X509CertificateRequest) (any, error)
-	LookupSSH  func(key string, cr *webhook.SSHCertificateRequest) (any, error)
+	LookupX509 func(key string, cr *webhook.X509CertificateRequest) (any, bool, error)
+	LookupSSH  func(key string, cr *webhook.SSHCertificateRequest) (any, bool, error)
 	AllowX509  func(certificate *webhook.X509Certificate) (bool, error)
 	AllowSSH   func(certificate *webhook.SSHCertificate) (bool, error)
 	Secrets    map[string]Secret
@@ -170,14 +170,15 @@ func (h *Handler) EnrichX509(w http.ResponseWriter, r *http.Request) {
 
 	_, key := path.Split(r.URL.Path)
 
-	data, err := h.LookupX509(key, wrb.X509CertificateRequest)
+	println(r.URL.Path)
+	data, ok, err := h.LookupX509(key, wrb.X509CertificateRequest)
 	if err != nil {
 		log.Printf("Failed to lookup data for %s: %v", key, err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(webhook.ResponseBody{Data: data, Allow: false})
+	err = json.NewEncoder(w).Encode(webhook.ResponseBody{Data: data, Allow: ok})
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, "Internal Server Error", 500)
@@ -203,14 +204,14 @@ func (h *Handler) EnrichSSH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := h.LookupSSH(key, cr)
+	data, ok, err := h.LookupSSH(key, cr)
 	if err != nil {
 		log.Printf("Failed to lookup data for %s: %v", key, err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(webhook.ResponseBody{Data: data, Allow: true})
+	err = json.NewEncoder(w).Encode(webhook.ResponseBody{Data: data, Allow: ok})
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, "Internal Server Error", 500)

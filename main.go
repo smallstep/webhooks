@@ -13,10 +13,7 @@ import (
 
 var certFile = "webhook.crt"
 var keyFile = "webhook.key"
-var clientCAs = []string{
-	"/home/areed/.step/authorities/ssh/certs/root_ca.crt",
-	"/home/areed/.step/authorities/x509/certs/root_ca.crt",
-}
+var clientCAs = []string{"root_ca.crt"}
 var address = ":9443"
 
 type data struct {
@@ -29,14 +26,8 @@ var db = map[string]data{
 
 // For demonstration only. Do not hardcode or commit actual webhook secrets.
 var webhookIDsToSecrets = map[string]server.Secret{
-	"db963269-ae37-46b8-aa69-7a7a9c346f8a": server.Secret{
-		Signing: "qL4wn7umqfecBW52Loo+NJ0V2ViC8TlXxt3LUdoIgsTdTSakCGOjLsZyiHo5io0bkcMNZCIPFXYv3xH2SsAgmg==",
-	},
-	"ab62d6a3-80fa-480a-b508-5a7f3de11d94": server.Secret{
-		Signing: "0qNQMfCY3mWyXAoLE6P8pq+AVGEkDjwKP/sF30LOHHjDs5vfWYk97ulXCgJZcD61piFISd4IJhcxu3ChNw9l6Q==",
-	},
-	"7d46b110-7645-430e-a32e-12fa611bda7d": server.Secret{
-		Signing: "e1b7PFqOXtBHVL+GawfD2H3KpsgRjxeFS6UYqzYiWeZzcHP7lPh4dXAfidNqpguqFA9F5mX2Us7iDuYOAxLUcQ==",
+	"ca22a710-160c-44eb-8930-56f538852d35": server.Secret{
+		Signing: "uEnYBUlxoYZFgzoerCzUjr+RqpxQcBzjhpr5koILYgdrDnldhXIDf2xXVPhDdcot3/9SYqFhhQW7JwEcEJgW2Q==",
 	},
 }
 
@@ -61,11 +52,13 @@ func main() {
 
 	h := &server.Handler{
 		Secrets: webhookIDsToSecrets,
-		LookupX509: func(key string, csr *webhook.X509CertificateRequest) (any, error) {
-			return db[key], nil
+		LookupX509: func(key string, csr *webhook.X509CertificateRequest) (any, bool, error) {
+			item, ok := db[key]
+			return item, ok, nil
 		},
-		LookupSSH: func(key string, cr *webhook.SSHCertificateRequest) (any, error) {
-			return db[key], nil
+		LookupSSH: func(key string, cr *webhook.SSHCertificateRequest) (any, bool, error) {
+			item, ok := db[key]
+			return item, ok, nil
 		},
 		AllowX509: func(cert *webhook.X509Certificate) (bool, error) {
 			cn := cert.Subject.CommonName
