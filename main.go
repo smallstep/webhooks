@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"fmt"
 
 	"github.com/smallstep/certificates/webhook"
 	"github.com/smallstep/webhooks/pkg/server"
@@ -14,20 +15,20 @@ import (
 var certFile = "webhook.crt"
 var keyFile = "webhook.key"
 var clientCAs = []string{"root_ca.crt"}
-var address = ":9443"
+var address = ":4443"
 
 type data struct {
 	Role string `json:"role"`
 }
 
 var db = map[string]data{
-	"andrew@smallstep.com": {Role: "eng"},
+	"carl@smallstep.com": {Role: "eng"},
 }
 
 // For demonstration only. Do not hardcode or commit actual webhook secrets.
 var webhookIDsToSecrets = map[string]server.Secret{
-	"ca22a710-160c-44eb-8930-56f538852d35": server.Secret{
-		Signing: "uEnYBUlxoYZFgzoerCzUjr+RqpxQcBzjhpr5koILYgdrDnldhXIDf2xXVPhDdcot3/9SYqFhhQW7JwEcEJgW2Q==",
+	"8509cf3b-c657-4f69-bf78-636be7cd91fc": server.Secret{
+		Signing: "G0syl5ee8W1zFTMjhJXpYFuK0QVmZfG++ImzslyVyyciv58ftmX7NMXKJeWCA/A3shjX+xrsoGO0f1+nfu/FSw==",
 	},
 }
 
@@ -74,6 +75,7 @@ func main() {
 	http.HandleFunc("/auth/", h.Authorize)
 	http.HandleFunc("/auth-ssh/", h.AuthorizeSSH)
 
+	fmt.Printf("Listening on %s\n", s.Addr)
 	err := s.ListenAndServeTLS(certFile, keyFile)
 	log.Fatal(err)
 }
