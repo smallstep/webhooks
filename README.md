@@ -5,7 +5,7 @@ This repo contains an example webhook server in Go compatible with [step-ca prov
 ## Requirements
 
 1. [Install Go](https://go.dev/doc/install)
-2. Generate a certificate for the server available at the paths `webhook.crt` and `webhook.key`: `step ca certificate localhost:9443 webhook.crt webhook.key`
+2. Generate a certificate for the server available at the paths `webhook.crt` and `webhook.key`: `step ca certificate localhost webhook.crt webhook.key`
 3. Provide your authority's root cert at `root_ca.crt`: `step ca root > root_ca.crt`.
 4. Update the [secrets](https://github.com/smallstep/webhooks/blob/f6a74c2e30dcb19b15d9903fdb6271a8358d26cd/main.go#L31) and [db](https://github.com/smallstep/webhooks/blob/f6a74c2e30dcb19b15d9903fdb6271a8358d26cd/main.go#L26) maps with your own webhook secret and entity.
 5. Start the server with `go run main.go`.
