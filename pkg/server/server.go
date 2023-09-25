@@ -80,7 +80,9 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*webhook
 		return nil, false
 	}
 
-	mac := hmac.New(sha256.New, sigSecret).Sum(body)
+	hm := hmac.New(sha256.New, sigSecret)
+	hm.Write(body)
+	mac := hm.Sum(nil)
 	if ok := hmac.Equal(sig, mac); !ok {
 		log.Printf("Failed to verify request signature for %s", id)
 		http.Error(w, "Invalid signature", http.StatusBadRequest)
